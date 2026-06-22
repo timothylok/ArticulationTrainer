@@ -171,11 +171,11 @@ Never read generated artifacts (HTML, compiled output, cached reports) for proje
 
 - Next.js App Router (TypeScript)
 - Tailwind CSS + shadcn/ui
-- Claude API (`claude-sonnet-4-6` / `claude-haiku-4-5`) — prompt generation, analysis, weekly summaries
-- Groq Whisper — audio transcription
+- LLM fallback chain (`lib/llm.ts`): MiniMax M3 → Agnes AI (`agnes-2.0-flash`) → Groq (`llama-3.3-70b-versatile`)
+- Groq Whisper (`whisper-large-v3-turbo`) — audio transcription
 - Notion API — persistent storage (Speaking Sessions, Career Goals, Weekly Reviews)
 - cron-job.org — daily/weekly webhook triggers
-- Vercel — hosting + env var management
+- Vercel — hosting + env var management (`https://articulation-trainer.vercel.app`)
 
 ### Key files and entry points
 
@@ -190,28 +190,31 @@ Never read generated artifacts (HTML, compiled output, cached reports) for proje
 - `app/api/weekly-review/route.ts` — POST: aggregate + summarize week
 - `app/api/webhook/daily/route.ts` — cron trigger (daily)
 - `app/api/webhook/weekly/route.ts` — cron trigger (weekly/Friday)
-- `lib/llm.ts` — Claude client + helpers
-- `lib/prompts.ts` — system prompts (generation + analysis rubric)
-- `lib/notion.ts` — Notion client + typed helpers
+- `lib/llm.ts` — cloud LLM fallback chain (MiniMax → Agnes → Groq)
+- `lib/prompts.ts` — system prompts (generation + analysis rubric + weekly summary)
+- `lib/notion.ts` — Notion client + typed helpers (logSession, fetchSessions, logWeeklyReview, fetchWeeklyReviews)
 - `lib/scoring.ts` — WPM, filler count, derived metrics
 - `lib/config.ts` — constants, rubric weights, mode rotation
-- `middleware.ts` — password-based route protection
+- `lib/getPrompt.ts` — server-side prompt generation (called directly, not via HTTP, to bypass auth proxy)
+- `proxy.ts` — password-based route protection (Next.js 16 uses proxy.ts, not middleware.ts)
 - `PERSONA.md` — CTO-advisor persona details used in prompt generation
 
 ### Environment variables
 
-- `ANTHROPIC_API_KEY` — Claude API access
-- `TRANSCRIBE_API_KEY` — Groq Whisper API key
+- `MINIMAX_API_KEY` — MiniMax M3 (primary LLM; not yet confirmed working)
+- `AGNES_API_KEY` — Agnes AI `agnes-2.0-flash` (current effective primary LLM)
+- `TRANSCRIBE_API_KEY` — Groq key; dual-use: Whisper transcription + Groq LLM fallback
 - `NOTION_API_KEY` — Notion integration token
 - `NOTION_DB_SESSIONS` — Notion database ID for Speaking Sessions
 - `NOTION_DB_GOALS` — Notion database ID for Career Goals
 - `NOTION_DB_WEEKLY` — Notion database ID for Weekly Reviews
-- `APP_PASSWORD` — single shared password for middleware auth
+- `APP_PASSWORD` — single shared password for auth cookie
 - `CRON_SECRET` — shared secret to authenticate cron-job.org webhook calls
+- `NEXT_PUBLIC_BASE_URL` — set to Vercel URL in production (`https://articulation-trainer.vercel.app`)
 
 ### Architecture / data flow
 
-cron-job.org (or user) hits `/api/webhook/daily` → prompts `/api/prompt` to pre-generate scenario via Claude (pulling Career Goals from Notion). User opens app → fetches prompt → records audio via `MediaRecorder` → POST to `/api/transcribe` (Groq Whisper) → POST transcript to `/api/analyze` (Claude rubric scoring) → POST structured result to `/api/notion/log` → feedback displayed. Friday: cron hits `/api/webhook/weekly` → `/api/weekly-review` fetches last 5 sessions from Notion → Claude generates summary → stored in Weekly Reviews.
+cron-job.org (or user) hits `/api/webhook/daily` → calls `getPrompt()` directly to pre-generate scenario via LLM chain (pulling Career Goals from Notion). User opens app → server component calls `getPrompt()` directly → records audio via `MediaRecorder` → POST to `/api/transcribe` (Groq Whisper) → POST transcript to `/api/analyze` (LLM rubric scoring) → POST structured result to `/api/notion/log` → feedback displayed. Friday: cron hits `/api/webhook/weekly` → `/api/weekly-review` fetches last 5 sessions from Notion → LLM generates summary → stored in Weekly Reviews.
 
 ### Pre-authorized destructive actions
 
@@ -230,6 +233,12 @@ Generalized patterns from past mistakes — apply these proactively.
 | Confirmation scope | User approved an action once; assumed blanket approval | Re-confirm destructive or shared-state actions each session unless pre-authorized in this file |
 | Speculative error handling | Added validation for states that can't occur internally | Only validate at true system boundaries; trust internal invariants |
 | Silent interpretation | Picked one of two interpretations and implemented without asking | Surface ambiguity before touching code |
+| Notion property name exactness | `Business alignment ` (trailing space) silently broke all session saves | Always verify Notion property names via API with `JSON.stringify(key)` before wiring writes |
+| Fire-and-forget must still log | `.catch(() => {})` hid Notion errors for the entire session | Use `.then(r => { if (!r.ok) console.error(...) }).catch(err => console.error(...))` |
+| MediaRecorder timeslice unreliable | `recorder.start(250)` only delivered final chunk in some browsers | Use `recorder.start()` with no timeslice — all audio arrives in one event on stop |
+| Groq models decommission | `llama-3.1-70b-versatile` caused runtime error after decommission | Verify model names against Groq docs before hardcoding; current: `llama-3.3-70b-versatile` |
+| App Router useSearchParams | `useSearchParams()` in a client component crashes the Vercel build | Wrap the component using `useSearchParams` in `<Suspense>` at the page level |
+| proxy.ts not middleware.ts | Next.js 16 changed middleware convention; never import `@/lib/*` inside proxy.ts (Edge runtime) | File must be `proxy.ts`, export `default function proxy(...)`, inline any constants needed |
 
 ---
 
