@@ -54,7 +54,9 @@ export default function DrillSession({ promptData }: Props) {
           mode: promptData.mode,
           analysis: result,
         }),
-      }).catch(() => { /* Notion optional */ })
+      }).then(async (r) => {
+        if (!r.ok) console.error('Notion log failed:', await r.text())
+      }).catch((err) => console.error('Notion log error:', err))
     } catch (err) {
       setAnalyzeError(err instanceof Error ? err.message : 'Analysis failed')
       setSessionState('recorded')

@@ -37,7 +37,7 @@ export default function Recorder({ onTranscript }: Props) {
 
       mediaRecorderRef.current = recorder
       startTimeRef.current = Date.now()
-      recorder.start(250)
+      recorder.start()
       setState('recording')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not access microphone')
